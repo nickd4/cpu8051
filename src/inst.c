@@ -332,9 +332,9 @@ static void fetch_arg(int mode, int* arg, int oparg0, int oparg1) {
         break;
     case EXT:   *arg = fetch_ext_ram(dptr);
         break;
-    case EXT0:  *arg = fetch_ext_ram(fetch_r(0));
+    case EXT0:  *arg = fetch_ext_ram(fetch_r(0) | (fetch_sfr(SFR_P2) << 8));
         break;
-    case EXT1:  *arg = fetch_ext_ram(fetch_r(1));
+    case EXT1:  *arg = fetch_ext_ram(fetch_r(1) | (fetch_sfr(SFR_P2) << 8));
         break;
 #else
     case IND0:  *arg = ((fetch_r(0) & 0xff) < SFR_START) ? fetch_int_ram(fetch_r(0) & 0xff) : 0; // Indirect does not access SFRs
@@ -410,10 +410,10 @@ static void write_arg (int mode, int arg, int oparg0) {
         set_ext_ram(dptr, arg);
         break;
     case EXT0:
-        set_ext_ram(fetch_r(0), arg);
+        set_ext_ram(fetch_r(0) | (fetch_sfr(SFR_P2) << 8), arg);
         break;
     case EXT1:
-        set_ext_ram(fetch_r(1), arg);
+        set_ext_ram(fetch_r(1) | (fetch_sfr(SFR_P2) << 8), arg);
         break;
 #else
     case IND0: 
@@ -500,7 +500,11 @@ void reset_cpu()
     b    = 0;
     dptr = 0;
     pc   = 0;
+#if ALT_BACKEND
+    sp   = 7;
+#else
     sp   = 0;
+#endif
     psw  = 0;
 #if !ALT_BACKEND
     ie   = 0;
@@ -571,7 +575,11 @@ void ADD (pDecode_t d) {
     int with_carry;
     int old_acc;
     int arg;
+#if 1 // fix AC and OV
+    int c;
+#else
     int add_val;
+#endif
 
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
@@ -585,13 +593,27 @@ void ADD (pDecode_t d) {
     old_acc = acc;
 
     // Perform addition
+#if 1 // fix AC and OV
+    c = with_carry ? GET_PSW_CY(psw) : 0;
+    acc += arg + c;
+#else
     add_val = arg + ((with_carry) ? ((psw & (1 << PSW_CY)) ? 1 : 0) : 0);
     acc += add_val;
+#endif
 
     // Update flags
     SET_PSW_CY(psw, acc & 0x100);
+#if 1 // fix AC and OV
+    SET_PSW_AC(psw, ((old_acc & 0xf) + (arg & 0xf) + c) & 0x10);
+    SET_PSW_OV(
+        psw,
+        ((((old_acc & 0x7f) + (arg & 0x7f) + c) & 0x80) != 0) ^
+        ((acc & 0x100) != 0)
+    );
+#else
     SET_PSW_AC(psw, (((old_acc & 0xf) + (add_val & 0xf)) & 0x10) ? 1 : 0);
     SET_PSW_OV(psw, (old_acc ^ acc) & 0x80);
+#endif
     SET_PSW_P(psw, odd_parity8(acc));
 
     // Discard carry/overflow information
@@ -1331,7 +1353,14 @@ void POP(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
+#if 1
+    if (d->arg0 < SFR_START)
+        set_int_ram(d->arg0, fetch_int_ram(sp--));
+    else
+        set_sfr(d->arg0, fetch_int_ram(sp--));
+#else
     set_int_ram(d->arg0, fetch_int_ram(sp--));
+#endif
 
     pc += d->decode->instr_size;
 }
@@ -1348,7 +1377,14 @@ void PUSH(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
+#if 1
+    if (d->arg0 < SFR_START)
+        set_int_ram(++sp, fetch_int_ram(d->arg0));
+    else
+        set_int_ram(++sp, fetch_sfr(d->arg0));
+#else
     set_int_ram(++sp, fetch_int_ram(d->arg0));
+#endif
 
     pc += d->decode->instr_size;
 }
@@ -1535,6 +1571,9 @@ void SJMP(pDecode_t d) {
 //
 void SUBB(pDecode_t d) {
     int op1, old_acc; 
+#if 1 // fix AC and OV
+    int c;
+#endif
 
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
@@ -1543,11 +1582,24 @@ void SUBB(pDecode_t d) {
 
     old_acc = acc;
 
+#if 1 // fix AC and OV
+    c = GET_PSW_CY(psw);
+    acc = acc - op1 - c;
+
+    SET_PSW_CY(psw, acc & 0x100);
+    SET_PSW_AC(psw, ((old_acc & 0xf) - (op1 & 0xf) - c) & 0x10);
+    SET_PSW_OV(
+        psw,
+        ((((old_acc & 0x7f) - (op1 & 0x7f) - c) & 0x80) != 0) ^
+        ((acc & 0x100) != 0)
+    );
+#else
     acc -= GET_PSW_CY(psw) + op1;
 
     SET_PSW_CY(psw, (op1 > old_acc) ? 1 : 0);
     SET_PSW_AC(psw, ((op1 & 0xf) > (old_acc & 0xf)) ? 1 : 0);
     SET_PSW_OV(psw, ((old_acc ^ acc) & 0x80));
+#endif
     SET_PSW_P(psw, odd_parity8(acc));
 
     acc &= 0xff;
