@@ -23,6 +23,7 @@
 #include "8051.h"
 #include "read_ihx.h"
 
+#if !ALT_BACKEND
 static int timer (int time, int *wakeup_time, int timer);
 
 // Callback function pointers for interrupt sources
@@ -46,8 +47,10 @@ static int wakeup_time_tim0             = -1;
 static int wakeup_time_tim1             = -1; 
 static int wakeup_time_ser              = -1; 
 
+#if !ALT_BACKEND
 // Wakeup time state for the schedule
 static int wakeup_time_sched            = -1; 
+#endif
 
 // State to detect interrupt edges
 static int last_ext0_int                = 0;
@@ -59,12 +62,14 @@ static int      disable_lock_break = 0;      // Disable/enable brekpoint on lock
 static int      verbose = 0;                 // Verbosity level
 
        int      always_call_sfr_cb = 0;      // Always call a registered SFR access callback on all SFR accesses
+#endif
 
 // Main decode table for opcodes. Array of DecodeData_t structures, with each tuple consisting of
 // <func ptr>, <opcode str>, <num instr bytes>, <exec clk cycles>, <addr mode 1>, <addr mode 2>
 
 static DecodeData_t decode_table [DECODE_TABLE_SIZE] = DECODE_TABLE;
 
+#if !ALT_BACKEND
 // -------------------------------------------------------------------------
 // get_cycle_time()
 //
@@ -478,6 +483,7 @@ static void process_interrupts(void) {
         }
     }
 }
+#endif
 
 // -------------------------------------------------------------------------
 // execute()
@@ -487,31 +493,34 @@ static void process_interrupts(void) {
 // opcode and then calls the function retrieved in the table lookup to
 // action the intruction.
 
-static void execute (pDecode_t d) {
+/*static*/ void execute (pDecode_t d) {
 
     // Fetch the next instruction opcode
-    d->opcode = code_mem[pc];
+    d->opcode = fetch_code_mem(pc);
 
     // Get decode information from the master table
     d->decode = &decode_table[d->opcode];
 
     // Fetch any indicated argument bytes
     if (d->decode->instr_size > 1)
-        d->arg0 = code_mem[pc+1];
+        d->arg0 = fetch_code_mem(pc+1);
 
     if (d->decode->instr_size > 2)
-        d->arg1 = code_mem[pc+2];
+        d->arg1 = fetch_code_mem(pc+2);
 
+#if !ALT_BACKEND
     if (verbose) {
         fprintf(ofp, "0x%04x: %s (0x%02x): op0 = 0x%02x : op1 = 0x%02x : acc=0x%02x r0=%02x r1=%02x dptr=%04x : cycle = %d\n", 
                              pc, d->decode->instr_name, d->opcode, d->arg0, d->arg1, acc, r[0], r[1], dptr,
                              cycle_count);
     }
+#endif
 
     // Execute the indicated instruction
     d->decode->func(d);
 }
 
+#if !ALT_BACKEND
 // -------------------------------------------------------------------------
 // run_program()
 //
@@ -576,4 +585,4 @@ int run_program (char* filename, int cycles, int break_addr, int timer_enable) {
 
     return break_point;
 }
-
+#endif

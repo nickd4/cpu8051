@@ -290,7 +290,7 @@ extern uint8_t  code_mem [MAXCODEMEM];
 extern uint8_t  int_ram  [MAXINTRAM];
 extern uint8_t  ext_ram  [MAXEXTRAM];
 extern int      acc;            // Accumulator
-extern uint8_t* r;              // Registers (pointer mapped over active register bank in int_ram)
+//extern uint8_t* r;              // Registers (pointer mapped over active register bank in int_ram)
 extern int      pc;
 extern int      sp;
 extern int      dptr;
@@ -303,6 +303,12 @@ extern int      last_int_level;
 extern int      wakeup_time_ext_mem;
 extern int      wakeup_time_sfr;
 extern int      always_call_sfr_cb;
+
+// Nick
+extern int      b;
+extern int      psw;
+void execute (pDecode_t d);
+int fetch_code_mem (int addr);
 
 extern pmemcallback_t pExtCallback;
 extern pmemcallback_t pSfrCallback;

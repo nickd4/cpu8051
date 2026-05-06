@@ -22,20 +22,25 @@
 #include "8051.h"
 
 // Memory
+#if ALT_BACKEND
+int read_byte(void *context, int addr);
+void write_byte(void *context, int addr, int data);
+#else
        uint8_t  code_mem [MAXCODEMEM];
        uint8_t  ext_ram  [MAXEXTRAM];
        uint8_t  int_ram  [MAXINTRAM];
-
+#endif
 
 // Registers (acc, b and sp are also SFRs)
        int      acc;            // Accumulator
-       uint8_t* r;              // Registers (pointer mapped over active register bank in int_ram)
+       //uint8_t* r;              // Registers (pointer mapped over active register bank in int_ram)
        int      sp;             // Stack pointer
        int      pc;             // Current program counter value
-static int      b;              // The B register
+/*static*/ int      b;              // The B register
 
 // Special function regsiters
        int      dptr;           // Data pointer register
+#if !ALT_BACKEND
 static int      tcon;           // Timer Control
 static int      tmod;
 static int      tl0;            // Timers
@@ -49,18 +54,79 @@ static int      p0;             // ports
 static int      p1;             // ports
 static int      p2;
 static int      p3;
-static int      psw;
+#endif
+/*static*/ int      psw;
+#if !ALT_BACKEND
        int      ie;             // Interrupts
        int      ip;
+#endif
 
 // State not directly modelling 8051 state
        int      cycle_count;    // Cycle count
+#if !ALT_BACKEND
        int      break_point;    // Flag to indicate a termination/break point
+#endif
 
 // Interrupt level state
        int      int_level;
        int      last_int_level;
 
+// Nick
+int fetch_code_mem (int addr) {
+#if ALT_BACKEND
+    return read_byte(NULL, addr & 0xffff);
+#else
+    return code_mem[addr];
+#endif
+}
+
+static int fetch_ext_ram (int addr) {
+#if ALT_BACKEND
+    return read_byte(NULL, (addr & 0xffff) | 0x10000);
+#else
+    return ext_ram[addr];
+#endif
+}
+
+static int fetch_int_ram (int addr) {
+#if ALT_BACKEND
+    return read_byte(NULL, (addr & 0xff) | 0x20000);
+#else
+    return int_ram[addr];
+#endif
+}
+
+static int fetch_r(int addr) {
+#if ALT_BACKEND
+    return read_byte(NULL, (addr & 7) | (psw & 0x18) | 0x20000);
+#else
+    return int_ram[addr + (psw & (PSW_RS0 | PSW_RS1))];
+#endif
+}
+
+static void set_ext_ram(int addr, int arg) {
+#if ALT_BACKEND
+    write_byte(NULL, (addr & 0xffff) | 0x10000, arg);
+#else
+    ext_ram[addr] = arg;
+#endif
+}
+
+static void set_int_ram(int addr, int arg) {
+#if ALT_BACKEND
+    write_byte(NULL, (addr & 0xff) | 0x20000, arg);
+#else
+    int_ram[addr] = arg;
+#endif
+}
+
+static void set_r(int addr, int arg) {
+#if ALT_BACKEND
+    write_byte(NULL, (addr & 7) | (psw & 0x18) | 0x20000, arg);
+#else
+    int_ram[addr + (psw & (PSW_RS0 | PSW_RS1))] = arg;
+#endif
+}
 
 // -------------------------------------------------------------------------
 // odd_parity8()
@@ -86,6 +152,7 @@ int odd_parity8(unsigned val) {
 // should be okay.
 //
 int fetch_sfr (int addr) {
+#if !ALT_BACKEND
     int val;
 
     // If configured to always call a registered SFR access, then call it.
@@ -97,16 +164,20 @@ int fetch_sfr (int addr) {
             return val;
         }
     }
+#endif
     
     switch (addr) {
+#if !ALT_BACKEND
     case SFR_P0   : return p0;
         break;
+#endif
     case SFR_SP   : return sp;
         break;
     case SFR_DPL  : return dptr & 0xff;
         break;
     case SFR_DPH  : return (dptr >> 8) & 0xff;
         break;
+#if !ALT_BACKEND
     case SFR_PCON : return pcon;
         break;
     case SFR_TCON : return tcon;
@@ -135,13 +206,18 @@ int fetch_sfr (int addr) {
         break;
     case SFR_IP   : return ip;
         break;
+#endif
     case SFR_PSW  : return psw;
         break;
     case SFR_ACC  : return acc;
         break;
     case SFR_B    : return b;   
         break;
-    default       : return (pSfrCallback == NULL || always_call_sfr_cb) ? int_ram[addr] : pSfrCallback(addr, 0, MEM_CB_READ, int_ram, cycle_count);
+#if ALT_BACKEND
+    default       : return read_byte(NULL, 0x20100 | (addr & 0x7f));
+#else
+    default       : return (pSfrCallback == NULL || always_call_sfr_cb) ? fetch_int_ram(addr) : pSfrCallback(addr, 0, MEM_CB_READ, int_ram, cycle_count);
+#endif
         break;
     }
 }
@@ -156,6 +232,7 @@ int fetch_sfr (int addr) {
 //
 void set_sfr (int addr, int arg) {
 
+#if !ALT_BACKEND
     // If configured to always call any configured SFR access callback do it now.
     // If the callback processes the access, simply return, else allow internal
     // processing.
@@ -166,17 +243,21 @@ void set_sfr (int addr, int arg) {
             return;
         }
     }
+#endif
 
     switch (addr) {
 
+#if !ALT_BACKEND
     case SFR_P0   : p0      = arg;
         break;
+#endif
     case SFR_SP   : sp      = arg;
         break;
     case SFR_DPL  : dptr    = (dptr & 0xff00) | (arg & 0xff);
         break;
     case SFR_DPH  : dptr    = (dptr & 0x00ff) | ((arg & 0xff) << 8);
         break;
+#if !ALT_BACKEND
     case SFR_PCON : pcon    = arg;
         break;
     case SFR_TCON : tcon    = arg;
@@ -205,10 +286,13 @@ void set_sfr (int addr, int arg) {
         break;
     case SFR_IP   : ip      = arg;
         break;
+#endif
     case SFR_PSW  : 
         psw = arg;
+#if !ALT_BACKEND
         // Update register bank on RS bits
         r = &int_ram[psw & (PSW_RS0 | PSW_RS1)];
+#endif
         break;
     case SFR_ACC  : 
         acc     = arg;
@@ -216,11 +300,14 @@ void set_sfr (int addr, int arg) {
         break;
     case SFR_B    : b       = arg;
         break;
-    default       : (pSfrCallback == NULL || always_call_sfr_cb) ? int_ram[addr] = arg : pSfrCallback(addr, arg, MEM_CB_WRITE, int_ram, cycle_count);
+#if ALT_BACKEND
+    default       : write_byte(NULL, 0x20100 | (addr & 0x7f), arg);
+#else
+    default       : (pSfrCallback == NULL || always_call_sfr_cb) ? set_int_ram(addr, arg) : pSfrCallback(addr, arg, MEM_CB_WRITE, int_ram, cycle_count);
+#endif
         break;
     }
 }
-
 
 // -------------------------------------------------------------------------
 // fetch_arg()
@@ -236,37 +323,50 @@ static void fetch_arg(int mode, int* arg, int oparg0, int oparg1) {
         break;
     case IMM16: *arg = oparg1 | (oparg0 << 8);
         break;
-    case DIR:   *arg = ((oparg0 & 0xff) < SFR_START) ? int_ram[oparg0 & 0xff] : fetch_sfr(oparg0 & 0xff);
+    case DIR:   *arg = ((oparg0 & 0xff) < SFR_START) ? fetch_int_ram(oparg0 & 0xff) : fetch_sfr(oparg0 & 0xff);
         break;
-    case IND0:  *arg = ((r[0] & 0xff) < SFR_START) ? int_ram[r[0] & 0xff] : 0; // Indirect does not access SFRs
+#if ALT_BACKEND
+    case IND0:  *arg = fetch_int_ram(fetch_r(0) & 0xff);
         break;
-    case IND1:  *arg = ((r[1] & 0xff) < SFR_START) ? int_ram[r[1] & 0xff] : 0; // Indirect does not access SFRs
+    case IND1:  *arg = fetch_int_ram(fetch_r(1) & 0xff);
         break;
-    case EXT:   *arg = (pExtCallback == NULL) ? ext_ram[dptr] : pExtCallback(dptr, 0, MEM_CB_READ, ext_ram, cycle_count);
+    case EXT:   *arg = fetch_ext_ram(dptr);
         break;
-    case EXT0:  *arg = (pExtCallback == NULL) ? ext_ram[r[0]] : pExtCallback(r[0], 0, MEM_CB_READ, ext_ram, cycle_count);
+    case EXT0:  *arg = fetch_ext_ram(fetch_r(0));
         break;
-    case EXT1:  *arg = (pExtCallback == NULL) ? ext_ram[r[1]] : pExtCallback(r[1], 0, MEM_CB_READ, ext_ram, cycle_count);
+    case EXT1:  *arg = fetch_ext_ram(fetch_r(1));
         break;
+#else
+    case IND0:  *arg = ((fetch_r(0) & 0xff) < SFR_START) ? fetch_int_ram(fetch_r(0) & 0xff) : 0; // Indirect does not access SFRs
+        break;
+    case IND1:  *arg = ((fetch_r(1) & 0xff) < SFR_START) ? fetch_int_ram(fetch_r(1) & 0xff) : 0; // Indirect does not access SFRs
+        break;
+    case EXT:   *arg = (pExtCallback == NULL) ? fetch_ext_ram(dptr) : pExtCallback(dptr, 0, MEM_CB_READ, ext_ram, cycle_count);
+        break;
+    case EXT0:  *arg = (pExtCallback == NULL) ? fetch_ext_ram(fetch_r(0)) : pExtCallback(fetch_r(0), 0, MEM_CB_READ, ext_ram, cycle_count);
+        break;
+    case EXT1:  *arg = (pExtCallback == NULL) ? fetch_ext_ram(fetch_r(1)) : pExtCallback(fetch_r(1), 0, MEM_CB_READ, ext_ram, cycle_count);
+        break;
+#endif
     case ACC:   *arg = acc;
         break;
     case BREG:  *arg = b;
         break;
-    case REG0:  *arg = r[0];
+    case REG0:  *arg = fetch_r(0);
         break;
-    case REG1:  *arg = r[1];
+    case REG1:  *arg = fetch_r(1);
         break;
-    case REG2:  *arg = r[2];
+    case REG2:  *arg = fetch_r(2);
         break;
-    case REG3:  *arg = r[3];
+    case REG3:  *arg = fetch_r(3);
         break;
-    case REG4:  *arg = r[4];
+    case REG4:  *arg = fetch_r(4);
         break;
-    case REG5:  *arg = r[5];
+    case REG5:  *arg = fetch_r(5);
         break;
-    case REG6:  *arg = r[6];
+    case REG6:  *arg = fetch_r(6);
         break;
-    case REG7:  *arg = r[7];
+    case REG7:  *arg = fetch_r(7);
         break;
     case DPTR:  *arg = dptr;
         break;
@@ -275,10 +375,10 @@ static void fetch_arg(int mode, int* arg, int oparg0, int oparg1) {
     case PC:    *arg = pc;
         break;
     case BIT:   *arg = (oparg0 >= SFR_START) ? ((fetch_sfr(oparg0 & 0xf8) >> (oparg0 & 0x7)) & 1) :
-                                               ((int_ram[0x20 + (oparg0 >> 3)] >> (oparg0 & 0x7)) & 1);
+                                               ((fetch_int_ram(0x20 + (oparg0 >> 3)) >> (oparg0 & 0x7)) & 1);
         break;
     case NBIT:  *arg = ~((oparg0 >= SFR_START) ? ((fetch_sfr(oparg0 & 0xf8) >> (oparg0 & 0x7)) & 1) :
-                                                ((int_ram[0x20 + (oparg0 >> 3)] >> (oparg0 & 0x7)) & 1)) & 1;
+                                                ((fetch_int_ram(0x20 + (oparg0 >> 3)) >> (oparg0 & 0x7)) & 1)) & 1;
         break;
     }
 }
@@ -294,58 +394,76 @@ static void write_arg (int mode, int arg, int oparg0) {
 
     case DIR:  
         if ((oparg0 & 0xff) < SFR_START)
-           int_ram[oparg0 & 0xff] = arg;
+           set_int_ram(oparg0 & 0xff, arg);
         else
            set_sfr(oparg0 & 0xff, arg);
         break;
 
+#if ALT_BACKEND
+    case IND0:
+        set_int_ram(fetch_r(0) & 0xff, arg);
+        break;
+    case IND1:
+        set_int_ram(fetch_r(1) & 0xff, arg);
+        break;
+    case EXT: 
+        set_ext_ram(dptr, arg);
+        break;
+    case EXT0:
+        set_ext_ram(fetch_r(0), arg);
+        break;
+    case EXT1:
+        set_ext_ram(fetch_r(1), arg);
+        break;
+#else
     case IND0: 
-        if ((r[0] & 0xff) < SFR_START)
-            int_ram[r[0] & 0xff] = arg;
+        if ((fetch_r(0) & 0xff) < SFR_START)
+            set_int_ram(fetch_r(0) & 0xff, arg);
         break;
     case IND1: 
-        if ((r[1] & 0xff) < SFR_START)
-            int_ram[r[1] & 0xff] = arg;
+        if ((fetch_r(1) & 0xff) < SFR_START)
+            set_int_ram(fetch_r(1) & 0xff, arg);
         break;
     case EXT:  
         if (pExtCallback == NULL)
-            ext_ram[dptr] = arg;
+            set_ext_ram(dptr, arg);
         else
             pExtCallback(dptr, arg, MEM_CB_WRITE, ext_ram, cycle_count);
         break;
     case EXT0: 
         if (pExtCallback == NULL)
-            ext_ram[r[0]] = arg;
+            set_ext_ram(fetch_r(0), arg);
         else
-            pExtCallback(r[0], arg, MEM_CB_WRITE, ext_ram, cycle_count);
+            pExtCallback(fetch_r(0), arg, MEM_CB_WRITE, ext_ram, cycle_count);
         break;
     case EXT1: 
         if (pExtCallback == NULL)
-            ext_ram[r[1]] = arg;
+            set_ext_ram(fetch_r(1), arg);
         else
-            pExtCallback(r[1], arg, MEM_CB_WRITE, ext_ram, cycle_count);
+            pExtCallback(fetch_r(1), arg, MEM_CB_WRITE, ext_ram, cycle_count);
         break;
+#endif
     case ACC:
         acc  = arg;
         SET_PSW_P(psw, odd_parity8(acc));
         break;
     case BREG: b    = arg;
         break;
-    case REG0: r[0] = arg;
+    case REG0: set_r(0, arg);
         break;
-    case REG1: r[1] = arg;
+    case REG1: set_r(1, arg);
         break;
-    case REG2: r[2] = arg;
+    case REG2: set_r(2, arg);
         break;
-    case REG3: r[3] = arg;
+    case REG3: set_r(3, arg);
         break;
-    case REG4: r[4] = arg;
+    case REG4: set_r(4, arg);
         break;
-    case REG5: r[5] = arg;
+    case REG5: set_r(5, arg);
         break;
-    case REG6: r[6] = arg;
+    case REG6: set_r(6, arg);
         break;
-    case REG7: r[7] = arg;
+    case REG7: set_r(7, arg);
         break;
     case DPTR: dptr = arg;
         break;
@@ -357,8 +475,8 @@ static void write_arg (int mode, int arg, int oparg0) {
         if (oparg0 >= SFR_START)
             set_sfr(oparg0 & 0xf8, (fetch_sfr(oparg0 & 0xf8) & ~(1 << (oparg0 & 0x7))) | ((arg & 1) << (oparg0 & 0x7)));
         else
-            int_ram[BIT_RAM_START + (oparg0 >> 3) & 0xff] = (int_ram[BIT_RAM_START + (oparg0 >> 3) & 0xff] & ~(1 << (oparg0 & 0x7))) |
-                                                            ((arg & 1) << (oparg0 & 0x7));
+            set_int_ram((BIT_RAM_START + (oparg0 >> 3)) & 0xff, (fetch_int_ram((BIT_RAM_START + (oparg0 >> 3)) & 0xff) & ~(1 << (oparg0 & 0x7))) |
+                                                            ((arg & 1) << (oparg0 & 0x7)));
         break;
     }
 }
@@ -370,16 +488,21 @@ static void write_arg (int mode, int arg, int oparg0) {
 //
 void reset_cpu()
 {
+#if !ALT_BACKEND
     int idx;
+#endif
 
     // 8051 state
     acc  = 0;
+#if !ALT_BACKEND
     r    = &int_ram[0];
+#endif
     b    = 0;
     dptr = 0;
     pc   = 0;
     sp   = 0;
     psw  = 0;
+#if !ALT_BACKEND
     ie   = 0;
     ip   = 0;
     th0  = 0;
@@ -395,16 +518,21 @@ void reset_cpu()
     p3   = 0;
     scon = 0;
     sbuf = 0;
+#endif
 
     // Model state
     cycle_count    = 0;
+#if !ALT_BACKEND
     break_point    = 0;
+#endif
     int_level      = INT_LVL_OFF;
     last_int_level = INT_LVL_OFF;
 
+#if !ALT_BACKEND
     // Clear RAM (is this necessary?)
     for (idx = 0; idx < MAXINTRAM; idx++)
-        int_ram[idx] = 0;
+        set_int_ram(idx, 0);
+#endif
 }
 
 // -------------------------------------------------------------------------
@@ -420,11 +548,11 @@ void ACALL (pDecode_t d) {
     cycle_count += d->decode->clk_cycles;
 
     // Push the address of the next instruction onto the stack (ACALL is 2 bytes)
-    int_ram[++sp] = (pc  + d->decode->instr_size) & 0xff;
-    int_ram[++sp] = ((pc + d->decode->instr_size) >> 8) & 0xff;
+    set_int_ram(++sp, (pc  + d->decode->instr_size) & 0xff);
+    set_int_ram(++sp, ((pc + d->decode->instr_size) >> 8) & 0xff);
 
     // Update the PC
-    pc = (pc & 0xf800) | ((d->opcode >> 5) << 8) | code_mem[pc+1];
+    pc = (pc & 0xf800) | ((d->opcode >> 5) << 8) | fetch_code_mem(pc+1);
 }
 
 // -------------------------------------------------------------------------
@@ -584,7 +712,7 @@ void CLR (pDecode_t d) {
             offset = BIT_RAM_START + ((d->arg0 >> 3) & 0xf);
             bit    = d->arg0 & 0x7;
 
-            int_ram[offset] = int_ram[offset] & ~(1 << bit);
+            set_int_ram(offset, fetch_int_ram(offset) & ~(1 << bit));
         // SFR
         } else {
             offset = d->arg0 & 0xf8;
@@ -708,6 +836,8 @@ void DIV (pDecode_t d) {
         tmp = op1 % op2;
         op1 = op1 / op2;
     }
+ else
+  tmp = 0; // Nick, revisit this later
 
     write_arg(d->decode->addr_mode_op1, op1, d->arg0);
     write_arg(d->decode->addr_mode_op2, tmp, d->arg0);
@@ -980,8 +1110,8 @@ void LCALL (pDecode_t d) {
     cycle_count += d->decode->clk_cycles;
 
     // Push the address of the next instruction onto the stack (LCALL is 3 bytes)
-    int_ram[++sp] = ( pc + d->decode->instr_size) & 0xff;
-    int_ram[++sp] = ((pc + d->decode->instr_size) >> 8) & 0xff;
+    set_int_ram(++sp, ( pc + d->decode->instr_size) & 0xff);
+    set_int_ram(++sp, ((pc + d->decode->instr_size) >> 8) & 0xff);
 
     pc = d->arg1 + (d->arg0 << 8);
 }
@@ -1078,7 +1208,7 @@ void MOVC(pDecode_t d) {
 
     fetch_arg(d->decode->addr_mode_op2, &op2, d->arg0, d->arg1);
 
-    acc = code_mem[acc+op2];
+    acc = fetch_code_mem(acc+op2);
     
     SET_PSW_P(psw, odd_parity8(acc));
     
@@ -1201,7 +1331,7 @@ void POP(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
-    int_ram[d->arg0] = int_ram[sp--];
+    set_int_ram(d->arg0, fetch_int_ram(sp--));
 
     pc += d->decode->instr_size;
 }
@@ -1218,7 +1348,7 @@ void PUSH(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
-    int_ram[++sp] = int_ram[d->arg0];
+    set_int_ram(++sp, fetch_int_ram(d->arg0));
 
     pc += d->decode->instr_size;
 }
@@ -1236,8 +1366,8 @@ void RET(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
-    addr  = int_ram[sp--] << 8;
-    addr |= int_ram[sp--];
+    addr  = fetch_int_ram(sp--) << 8;
+    addr |= fetch_int_ram(sp--);
 
     pc = addr;
 }
@@ -1255,8 +1385,8 @@ void RETI(pDecode_t d) {
     // Update the cycle count
     cycle_count += d->decode->clk_cycles;
 
-    addr  = int_ram[sp--] << 8;
-    addr |= int_ram[sp--];
+    addr  = fetch_int_ram(sp--) << 8;
+    addr |= fetch_int_ram(sp--);
 
     pc = addr;
 
@@ -1363,7 +1493,7 @@ void SETB(pDecode_t d) {
             offset = BIT_RAM_START + ((d->arg0 >> 3) & 0xf);
             bit    = d->arg0 & 0x7;
 
-            int_ram[offset] = int_ram[offset] | (1 << bit);
+            set_int_ram(offset, fetch_int_ram(offset) | (1 << bit));
         } else {
             offset = d->arg0 & 0xf8;
             bit    = d->arg0 & 0x7;
@@ -1537,5 +1667,7 @@ void UNIMP(pDecode_t d) {
 
     pc += d->decode->instr_size;
 
+#if !ALT_BACKEND
     break_point = UNIMP_BREAK;
+#endif
 }
